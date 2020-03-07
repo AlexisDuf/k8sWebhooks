@@ -1,0 +1,11 @@
+containers:
+- name: sidecar-flume
+  image: busybox
+  command: ["nc", "-l", "-p", "63000"]
+  imagePullPolicy: IfNotPresent
+  ports:
+  - containerPort: 63000
+volumes:
+- name: sidecar-conf
+  configMap:
+    name: test

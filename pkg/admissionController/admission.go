@@ -49,7 +49,7 @@ func delegateV1beta1AdmitToV1(f admitv1Func) admitv1beta1Func {
 
 // serve handles the http portion of a request prior to handing to an admit
 // function
-func serve(w http.ResponseWriter, r *http.Request, admit admitHandler, sidecar *config.Sidecar) {
+func serve(w http.ResponseWriter, r *http.Request, admit admitHandler, config *config.Sidecar) {
 	var body []byte
 	if r.Body != nil {
 		if data, err := ioutil.ReadAll(r.Body); err == nil {
@@ -121,5 +121,5 @@ func serve(w http.ResponseWriter, r *http.Request, admit admitHandler, sidecar *
 
 //ServeMutatePods mutate pods
 func ServeMutatePods(w http.ResponseWriter, r *http.Request, sidecar *config.Sidecar) {
-	serve(w, r, newDelegateToV1AdmitHandler(mutatePodsSidecar), sidecar)
+	serve(w, r, newDelegateToV1AdmitHandler(applyPodPatch), sidecar)
 }

@@ -5,7 +5,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/AlexisDuf/k8sWebhooks/pkg/config"
+	config "github.com/AlexisDuf/k8sWebhooks/pkg/config"
 	v1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -13,25 +13,63 @@ import (
 )
 
 const (
-	podsInitContainerPatch string = `[
-		{"op":"add","path":"/spec/initContainers","value":[{"image":"webhook-added-image","name":"webhook-added-init-container","resources":{}}]}
-	]`
-	podsSidecarPatch string = `[
-		{"op":"add", "path":"/spec/containers/-","value":{"image":"%v","name":"webhook-added-sidecar","resources":{}}}
-	]`
-
 	sidecarImageAnnotInjectKey = "sidecar-image/inject"
 	sidecarImageAnnotStatusKey = "sidecar-image/status"
 )
 
-func createPodPatch()
+func addContainer(target, added []corev1.Container, basePath string) (patch []PatchOperation) {
+	first := len(target) == 0
+	var value interface{}
+	for _, add := range added {
+		value = add
+		path := basePath
+		if first {
+			first = false
+			value = []corev1.Container{add}
+		} else {
+			path = path + "/-"
+		}
+		patch = append(patch, PatchOperation{
+			Op:    "add",
+			Path:  path,
+			Value: value,
+		})
+	}
+	return patch
+}
 
-func mutatePodsSidecar(ar v1.AdmissionReview, sidecar *config.Sidecar) *v1.AdmissionResponse {
-	shouldPatchPod := func(pod *corev1.Pod) bool {
-		return hasAnnotation(&pod.ObjectMeta)
+func updateAnnotations(target map[string]string, added map[string]string) (patch []PatchOperation) {
+	for key, value := range added {
+		if target == nil || target[key] == "" {
+			target = map[string]string{}
+			patch = append(patch, PatchOperation{
+				Op:   "add",
+				Path: "/metadata/annotations",
+				Value: map[string]string{
+					key: value,
+				},
+			})
+		} else {
+			patch = append(patch, PatchOperation{
+				Op:    "replace",
+				Path:  "/metadata/annotations/" + key,
+				Value: value,
+			})
+		}
 	}
 
-	return applyPodPatch(ar, shouldPatchPod)
+	log.Printf("%v", patch)
+	return patch
+}
+
+func createPatch(pod *corev1.Pod, config *config.Sidecar, annotations map[string]string) ([]PatchOperation, error) {
+	var patch []PatchOperation
+
+	patch = append(patch, addContainer(pod.Spec.Containers, config.Containers, "/spec/containers")...)
+	patch = append(patch, updateAnnotations(pod.Annotations, annotations)...)
+
+	log.Printf("%v", patch)
+	return patch, nil
 }
 
 func hasAnnotation(metadata *metav1.ObjectMeta) bool {
@@ -58,7 +96,7 @@ func hasAnnotation(metadata *metav1.ObjectMeta) bool {
 	return required
 }
 
-func applyPodPatch(ar v1.AdmissionReview, shouldPatchPod func(*corev1.Pod) bool) *v1.AdmissionResponse {
+func applyPodPatch(ar v1.AdmissionReview, config *config.Sidecar) *v1.AdmissionResponse {
 	klog.V(2).Info("Mutating pods")
 	podResource := metav1.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
 	if ar.Request.Resource != podResource {
@@ -75,8 +113,13 @@ func applyPodPatch(ar v1.AdmissionReview, shouldPatchPod func(*corev1.Pod) bool)
 	}
 	reviewResponse := v1.AdmissionResponse{}
 	reviewResponse.Allowed = true
-	if shouldPatchPod(&pod) {
-		var mutationOperation []PatchOperation
+	if hasAnnotation(&pod.ObjectMeta) {
+		annotations := map[string]string{sidecarImageAnnotStatusKey: "injected"}
+
+		mutationOperation, err := createPatch(&pod, config, annotations)
+		if err != nil {
+			klog.Error(err)
+		}
 
 		patch, err := json.Marshal(mutationOperation)
 
